@@ -1,0 +1,1 @@
+# nvidia-fan-curve
