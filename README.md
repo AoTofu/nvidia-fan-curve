@@ -68,7 +68,6 @@ sudo curl -L -o /opt/nvidia-fan-curve/nvidia-fan-curve.py \
 sudo chmod 644 /opt/nvidia-fan-curve/nvidia-fan-curve.py
 ```
 
-> URL の `<your-username>` はあなたの GitHub ユーザー名に置き換えてください。
 
 ### 3. systemd サービスとして登録
 
