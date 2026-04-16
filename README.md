@@ -63,7 +63,7 @@ sudo pip install nvidia-ml-py --break-system-packages
 ```bash
 sudo mkdir -p /opt/nvidia-fan-curve
 sudo curl -L -o /opt/nvidia-fan-curve/nvidia-fan-curve.py \
-    https://raw.githubusercontent.com/<your-username>/nvidia-fan-curve/main/nvidia-fan-curve.py
+    https://raw.githubusercontent.com/AoTofu/nvidia-fan-curve/main/nvidia-fan-curve.py
 sudo chmod 644 /opt/nvidia-fan-curve/nvidia-fan-curve.py
 ```
 
