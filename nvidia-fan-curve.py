@@ -50,8 +50,8 @@ FAN_CURVE: list[tuple[int, int]] = [
     (30,  30),   # 30℃以下 → 30%
     (45,  35),
     (60,  45),
-    (70,  65),
-    (80,  85),
+    (70,  60),
+    (80,  70),
     (90, 100),   # 90℃以上 → 100%
 ]
 
@@ -61,6 +61,22 @@ POLL_INTERVAL = 3
 # ヒステリシス温度差（℃）
 # ファン速度を下げるには、現在温度がこの値ぶん下がる必要がある
 HYSTERESIS = 5
+
+# ランプレート（1秒あたりの最大ファン速度変化量, %/秒）
+# None にすると即座に目標速度へ変更（旧来の動作）
+# 数値を設定すると、ファン速度が時間的になめらかに変化する
+#
+# 例: RAMP_RATE_UP_PER_SEC = 5 のとき、30% → 80% への変化は
+#     最低 (80-30)/5 = 10秒 かけて段階的に上がる
+#
+# 上昇と下降で別々に設定できる。一般的に:
+#   - 上昇は早め (5〜10) → 熱い時はサッと冷やしたい
+#   - 下降は遅め (1〜3)  → 静かな時にスーッと自然に下がる
+#
+# どちらか片方だけ None にして「上昇は即時、下降だけマイルド」
+# のような設定も可能。
+RAMP_RATE_UP_PER_SEC: Optional[float] = 8     # ファン速度上昇の最大レート (%/秒)
+RAMP_RATE_DOWN_PER_SEC: Optional[float] = 2   # ファン速度下降の最大レート (%/秒)
 
 # 対象GPU番号（0始まり）
 GPU_INDEX = 0
@@ -198,6 +214,8 @@ class FanController:
         poll_interval: int,
         failsafe_speed: int,
         shutdown_safe_speed: Optional[int],
+        ramp_rate_up: Optional[float],
+        ramp_rate_down: Optional[float],
     ):
         self.gpu_index = gpu_index
         self.curve = curve
@@ -205,6 +223,8 @@ class FanController:
         self.poll_interval = poll_interval
         self.failsafe_speed = failsafe_speed
         self.shutdown_safe_speed = shutdown_safe_speed
+        self.ramp_rate_up = ramp_rate_up
+        self.ramp_rate_down = ramp_rate_down
 
         self.handle = None
         self.gpu_name = "?"
@@ -352,11 +372,46 @@ class FanController:
 
     # -------- メインループ --------
 
+    def _apply_ramp(self, current: int, target: int) -> int:
+        """ランプレートを適用して、今回適用する中間値を計算する。
+
+        current: 現在のファン速度
+        target:  カーブから計算した目標速度
+        戻り値:  この POLL_INTERVAL で実際に設定すべき速度
+        """
+        if target == current:
+            return current
+
+        if target > current:
+            # 上昇方向
+            if self.ramp_rate_up is None:
+                return target
+            max_step = self.ramp_rate_up * self.poll_interval
+            step = min(target - current, max_step)
+            # 1未満の端数は1に切り上げ（永遠に到達しないのを防ぐ）
+            stepped = current + max(1, int(round(step)))
+            return min(stepped, target)
+        else:
+            # 下降方向
+            if self.ramp_rate_down is None:
+                return target
+            max_step = self.ramp_rate_down * self.poll_interval
+            step = min(current - target, max_step)
+            stepped = current - max(1, int(round(step)))
+            return max(stepped, target)
+
     def run(self) -> None:
+        ramp_desc_up = (
+            f"{self.ramp_rate_up}%/s" if self.ramp_rate_up is not None else "即時"
+        )
+        ramp_desc_down = (
+            f"{self.ramp_rate_down}%/s" if self.ramp_rate_down is not None else "即時"
+        )
         log.info(
             f"ファンカーブ: {self.curve}  "
             f"ヒステリシス: {self.hysteresis}℃  "
-            f"ポーリング: {self.poll_interval}秒"
+            f"ポーリング: {self.poll_interval}秒  "
+            f"ランプ: ↑{ramp_desc_up} / ↓{ramp_desc_down}"
         )
 
         while self.running:
@@ -367,6 +422,7 @@ class FanController:
                     f"温度取得失敗: {e} → "
                     f"フェイルセーフ速度({self.failsafe_speed}%)を適用"
                 )
+                # フェイルセーフはランプを無視して即座に適用
                 self.set_fan_speed(self.failsafe_speed)
                 self.prev_fan_speed = self.failsafe_speed
                 self._sleep_interruptible(self.poll_interval)
@@ -374,24 +430,35 @@ class FanController:
 
             target = interpolate(temp, self.curve)
 
-            should_update = False
+            # ヒステリシス判定: 「動かす方向に踏み出すか」を決める
+            move_allowed = False
             if target > self.prev_fan_speed:
-                # 上昇は即座に適用
-                should_update = True
+                # 上昇は常に許可
+                move_allowed = True
             elif target < self.prev_fan_speed:
                 # 下降はヒステリシス越えのみ
                 if temp < self.step_down_temp:
-                    should_update = True
+                    move_allowed = True
 
-            if should_update and target != self.prev_fan_speed:
-                if self.set_fan_speed(target):
-                    self.prev_fan_speed = target
-                    self.step_down_temp = temp - self.hysteresis
-                    log.info(
-                        f"温度:{temp}℃ → ファン:{target}% "
-                        f"(step_down:{self.step_down_temp}℃)"
+            if move_allowed:
+                # ランプレートを適用して今回設定する値を決める
+                next_speed = self._apply_ramp(self.prev_fan_speed, target)
+                if next_speed != self.prev_fan_speed:
+                    if self.set_fan_speed(next_speed):
+                        # ランプ中の中間値ごとに step_down_temp を更新する
+                        # （ヒステリシスは「現在の速度に対する」温度差なので）
+                        self.step_down_temp = temp - self.hysteresis
+                        reaching = "" if next_speed == target else f" → 目標:{target}%"
+                        log.info(
+                            f"温度:{temp}℃ → ファン:{next_speed}%{reaching} "
+                            f"(step_down:{self.step_down_temp}℃)"
+                        )
+                        self.prev_fan_speed = next_speed
+                    # set_fan_speed が失敗したらログだけ出して維持
+                else:
+                    log.debug(
+                        f"温度:{temp}℃ / ファン:{self.prev_fan_speed}% (目標到達)"
                     )
-                # set_fan_speed が失敗したらログだけ出して維持
             else:
                 log.debug(
                     f"温度:{temp}℃ / ファン:{self.prev_fan_speed}% (維持)"
@@ -432,6 +499,8 @@ def main() -> None:
         poll_interval=POLL_INTERVAL,
         failsafe_speed=FAILSAFE_SPEED,
         shutdown_safe_speed=SHUTDOWN_SAFE_SPEED,
+        ramp_rate_up=RAMP_RATE_UP_PER_SEC,
+        ramp_rate_down=RAMP_RATE_DOWN_PER_SEC,
     )
 
     # 4) シグナルハンドラ
