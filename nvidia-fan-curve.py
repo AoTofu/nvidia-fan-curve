@@ -41,29 +41,30 @@ from pynvml import (
 )
 
 # ================================================================
-# ユーザー設定セクション（自由に編集してください）
+# ユーザー設定セクション(自由に編集してください)
 # ================================================================
 
 # ファンカーブ定義: (温度℃, ファン速度%) の昇順タプル列
 # 点と点の間は線形補間される
 FAN_CURVE: list[tuple[int, int]] = [
     (30,  30),   # 30℃以下 → 30%
-    (45,  35),
-    (60,  45),
-    (70,  60),
-    (80,  70),
+    (40,  35),
+    (50,  50),
+    (60,  60),
+    (70,  70),
+    (80,  80),
     (90, 100),   # 90℃以上 → 100%
 ]
 
-# ポーリング間隔（秒）
+# ポーリング間隔(秒)
 POLL_INTERVAL = 3
 
-# ヒステリシス温度差（℃）
+# ヒステリシス温度差(℃)
 # ファン速度を下げるには、現在温度がこの値ぶん下がる必要がある
 HYSTERESIS = 5
 
-# ランプレート（1秒あたりの最大ファン速度変化量, %/秒）
-# None にすると即座に目標速度へ変更（旧来の動作）
+# ランプレート(1秒あたりの最大ファン速度変化量, %/秒)
+# None にすると即座に目標速度へ変更(旧来の動作)
 # 数値を設定すると、ファン速度が時間的になめらかに変化する
 #
 # 例: RAMP_RATE_UP_PER_SEC = 5 のとき、30% → 80% への変化は
@@ -75,10 +76,10 @@ HYSTERESIS = 5
 #
 # どちらか片方だけ None にして「上昇は即時、下降だけマイルド」
 # のような設定も可能。
-RAMP_RATE_UP_PER_SEC: Optional[float] = 8     # ファン速度上昇の最大レート (%/秒)
+RAMP_RATE_UP_PER_SEC: Optional[float] = 4     # ファン速度上昇の最大レート (%/秒)
 RAMP_RATE_DOWN_PER_SEC: Optional[float] = 2   # ファン速度下降の最大レート (%/秒)
 
-# 対象GPU番号（0始まり）
+# 対象GPU番号(0始まり)
 GPU_INDEX = 0
 
 # 必須ドライババージョン (メジャー)
@@ -93,10 +94,10 @@ FAILSAFE_SPEED = 100
 # nvmlDeviceSetDefaultFanSpeed_v2 が機能しない既知バグへの保険として、
 # auto 復帰の後にこの速度を「下限保証」として明示的に設定する。
 # 自動制御が実際に効いていれば、ドライバがこれを上書きしてくれる。
-# None にするとフォールバック設定をスキップ（非推奨）。
+# None にするとフォールバック設定をスキップ(非推奨)。
 SHUTDOWN_SAFE_SPEED: Optional[int] = 60
 
-# ログレベル（logging.DEBUG / INFO / WARNING / ERROR）
+# ログレベル(logging.DEBUG / INFO / WARNING / ERROR)
 LOG_LEVEL = logging.INFO
 
 # ================================================================
@@ -127,7 +128,7 @@ def validate_curve(curve: list[tuple[int, int]]) -> None:
             )
         if curve[i][1] > curve[i + 1][1]:
             raise ValueError(
-                f"ファン速度は昇順（同値可）である必要があります: "
+                f"ファン速度は昇順(同値可)である必要があります: "
                 f"{curve[i][1]} > {curve[i+1][1]}"
             )
     for temp, speed in curve:
@@ -233,6 +234,7 @@ class FanController:
         self.step_down_temp = 0
         self.running = True
         self._nvml_inited = False
+        self._shutdown_done = False
 
     # -------- 初期化 --------
 
@@ -271,7 +273,7 @@ class FanController:
         log.info(f"GPU {self.gpu_index}: {self.gpu_name} (ファン数: {self.fan_count})")
 
         # 初期速度を設定。ここで失敗したら起動失敗扱いで例外を上げる
-        # （= 権限なし or ドライバ非対応 or ハードウェア非対応）。
+        # (= 権限なし or ドライバ非対応 or ハードウェア非対応)。
         initial_speed = self.curve[0][1]
         try:
             self._set_fan_speed_strict(initial_speed)
@@ -301,7 +303,7 @@ class FanController:
         """通常運転時のファン速度設定。
 
         個別ファンの失敗はログだけ出して継続するが、戻り値で成功可否を返す。
-        起動後の散発的失敗（バス一時切断など）でループを止めないため。
+        起動後の散発的失敗(バス一時切断など)でループを止めないため。
         """
         speed = max(0, min(100, int(speed)))
         all_ok = True
@@ -348,7 +350,7 @@ class FanController:
             try:
                 log.info(
                     f"フェイルセーフとして安全速度 {self.shutdown_safe_speed}% "
-                    f"を設定します（自動制御が効いていればドライバが上書きします）"
+                    f"を設定します(自動制御が効いていればドライバが上書きします)"
                 )
                 self._set_fan_speed_strict(self.shutdown_safe_speed)
             except NVMLError as e:
@@ -356,8 +358,9 @@ class FanController:
 
     def shutdown(self) -> None:
         """クリーンアップ。多重呼び出し安全。"""
-        if not self.running and not self._nvml_inited:
+        if self._shutdown_done:
             return
+        self._shutdown_done = True
         self.running = False
         try:
             self.restore_auto()
@@ -388,7 +391,7 @@ class FanController:
                 return target
             max_step = self.ramp_rate_up * self.poll_interval
             step = min(target - current, max_step)
-            # 1未満の端数は1に切り上げ（永遠に到達しないのを防ぐ）
+            # 1未満の端数は1に切り上げ(永遠に到達しないのを防ぐ)
             stepped = current + max(1, int(round(step)))
             return min(stepped, target)
         else:
@@ -445,9 +448,22 @@ class FanController:
                 next_speed = self._apply_ramp(self.prev_fan_speed, target)
                 if next_speed != self.prev_fan_speed:
                     if self.set_fan_speed(next_speed):
-                        # ランプ中の中間値ごとに step_down_temp を更新する
-                        # （ヒステリシスは「現在の速度に対する」温度差なので）
-                        self.step_down_temp = temp - self.hysteresis
+                        # 上昇時のみヒステリシス基準(step_down_temp)を更新する。
+                        #
+                        # 下降ランプ中に更新してはいけない理由:
+                        #   下降は「目標へ降りる」とコミット済みの動作。各ステップ
+                        #   で step_down_temp = current_temp - hysteresis に
+                        #   置き換えると、温度が急に下がった場合に新しい
+                        #   step_down_temp が一気に低くなり、次の反復で
+                        #   temp < step_down_temp が偽になってランプが詰まる。
+                        #   結果として「高負荷後にファンが中間速度で張り付く」
+                        #   症状が出る。
+                        #
+                        # ヒステリシスは「いま到達している最高速度から下げ始める
+                        # ための閾値」であって、「下降コミット後の各ステップで
+                        # 再評価する閾値」ではない。
+                        if next_speed > self.prev_fan_speed:
+                            self.step_down_temp = temp - self.hysteresis
                         reaching = "" if next_speed == target else f" → 目標:{target}%"
                         log.info(
                             f"温度:{temp}℃ → ファン:{next_speed}%{reaching} "
