@@ -1,65 +1,78 @@
 # nvidia-fan-curve
 
-> Wayland / ヘッドレス環境でも確実に動く、NVIDIA GPU のためのシンプルなファンカーブ制御デーモン
+> A simple fan curve control daemon for NVIDIA GPUs that works reliably on Wayland and headless environments.
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![NVIDIA](https://img.shields.io/badge/NVIDIA-Driver_520+-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](https://www.kernel.org/)
-[![License](https://img.shields.io/badge/License-MIT-blue)](#ライセンス)
-
----
-
-## 概要
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
 
 `nvidia-fan-curve` は、NVIDIA GPU のファン速度を温度に応じて自動制御する、軽量な常駐型 Python スクリプトです。
 
 従来の `nvidia-settings` 方式と異なり、**X11 セッションも `Coolbits` 設定も不要**。NVML (NVIDIA Management Library) を直接叩くため、Wayland、ヘッドレスサーバー、SSH 越しなど、あらゆる環境で確実に動作します。
 
-## なぜこれが必要か
+## Table of Contents
+
+- [Motivation](#motivation)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Recommended Presets](#recommended-presets)
+- [Management Commands](#management-commands)
+- [Running in a venv](#running-in-a-venv)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [How It Works](#how-it-works)
+- [Known Limitations](#known-limitations)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
+
+## Motivation
 
 Linux で NVIDIA GPU のファンカーブを自分好みに設定するのは、長年つらい作業でした。
 
 | 方式 | X11 必須 | Wayland 対応 | ヘッドレス対応 | 設定の手間 |
 |---|:---:|:---:|:---:|:---:|
-| `nvidia-settings` (従来方式) | ✅ 必須 | ❌ | ❌ (要 dummy X) | `Coolbits` 設定必要 |
-| **NVML (本プロジェクト)** | ❌ 不要 | ✅ | ✅ | なし |
+| `nvidia-settings` (従来方式) | Yes | No | No (要 dummy X) | `Coolbits` 設定必要 |
+| **NVML (本プロジェクト)** | No | Yes | Yes | なし |
 
-NVIDIA は ドライバ 515 で `nvmlDeviceSetFanSpeed_v2` を追加し、520 で GeForce 全般に開放しました。本スクリプトはこの新しい API を活用し、X11 依存から完全に解放されています。
+NVIDIA はドライバ 515 で `nvmlDeviceSetFanSpeed_v2` を追加し、520 で GeForce 全般に開放しました。本スクリプトはこの新しい API を活用し、X11 依存から完全に解放されています。
 
-## 特徴
+## Features
 
-- 🚀 **X11 非依存** — Wayland / ヘッドレス / SSH 環境でそのまま動く
-- 📈 **線形補間カーブ** — 自由に定義できる多点ファンカーブ
-- 🛡️ **ヒステリシス制御** — ファン速度が頻繁に上下しないよう温度差を持たせて制御
-- 🌊 **ランプレート制御** — ファン速度を時間的になめらかに変化させ、急な音の変化を抑制（上昇・下降で個別設定可能）
-- 🔧 **マルチファン対応** — RTX シリーズの 2 〜 3 ファン構成を自動検出
-- ⚡ **フェイルセーフ** — 温度取得失敗時は自動で 100% に。終了時も安全速度を保証
-- 🪶 **軽量** — メモリ使用量は約 25 MB、依存は `nvidia-ml-py` のみ
-- 🔍 **起動時診断** — root 権限・ドライババージョン・ハードウェア対応を起動時にチェックし、問題があれば即座に詳細なエラーで停止
-- 🧯 **ドライババグ対策** — `nvmlDeviceSetDefaultFanSpeed_v2` の既知バグに対する保険機構を内蔵
+- **X11 非依存** — Wayland / ヘッドレス / SSH 環境でそのまま動作します。
+- **線形補間カーブ** — 自由に定義できる多点ファンカーブ。
+- **ヒステリシス制御** — ファン速度が頻繁に上下しないよう、温度差を持たせて制御します。
+- **ランプレート制御** — ファン速度を時間的になめらかに変化させ、急な音の変化を抑制（上昇・下降で個別設定可能）。
+- **マルチファン対応** — RTX シリーズの 2〜3 ファン構成を自動検出します。
+- **フェイルセーフ** — 温度取得失敗時は自動で 100% に。終了時も安全速度を保証します。
+- **軽量** — メモリ使用量は約 25 MB、依存は `nvidia-ml-py` のみ。
+- **起動時診断** — root 権限・ドライババージョン・ハードウェア対応を起動時にチェックし、問題があれば即座に詳細なエラーで停止します。
+- **ドライババグ対策** — `nvmlDeviceSetDefaultFanSpeed_v2` の既知バグに対する保険機構を内蔵しています。
 
-## 動作要件
+## Requirements
 
 | 項目 | 要件 |
 |---|---|
 | OS | Linux (Fedora / Ubuntu / Arch など) |
 | NVIDIA ドライバ | **520 以降** (`nvidia-smi` で確認) |
 | Python | 3.9 以上 |
-| 権限 | root (systemd またはsudo 経由) |
+| 権限 | root (systemd または sudo 経由) |
 | GPU | NVML ファン制御対応の NVIDIA GPU (Maxwell 以降) |
 
-## インストール
+## Installation
 
-### 1. 依存パッケージのインストール
+### 1. Install dependencies
 
 ```bash
 sudo pip install nvidia-ml-py --break-system-packages
 ```
 
 > [!NOTE]
-> Fedora や最近の Ubuntu では PEP 668 により `--break-system-packages` が必要です。venv を使う場合は後述の[「venv で運用する」](#venv-で運用する)を参照してください。
+> Fedora や最近の Ubuntu では PEP 668 により `--break-system-packages` が必要です。venv を使う場合は後述の [Running in a venv](#running-in-a-venv) を参照してください。
 
-### 2. スクリプトの配置
+### 2. Deploy the script
 
 ```bash
 sudo mkdir -p /opt/nvidia-fan-curve
@@ -68,8 +81,7 @@ sudo curl -L -o /opt/nvidia-fan-curve/nvidia-fan-curve.py \
 sudo chmod 644 /opt/nvidia-fan-curve/nvidia-fan-curve.py
 ```
 
-
-### 3. systemd サービスとして登録
+### 3. Register as a systemd service
 
 ```bash
 sudo tee /etc/systemd/system/nvidia-fan-curve.service > /dev/null << 'EOF'
@@ -93,7 +105,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now nvidia-fan-curve.service
 ```
 
-### 4. 動作確認
+### 4. Verify
 
 ```bash
 sudo systemctl status nvidia-fan-curve.service
@@ -102,11 +114,11 @@ journalctl -u nvidia-fan-curve.service -f
 
 `Active: active (running)` と表示され、ログに GPU 名・ファン数・初期速度・ランプレート設定が出力されていれば成功です。
 
-## 設定
+## Configuration
 
 `/opt/nvidia-fan-curve/nvidia-fan-curve.py` の冒頭にある `ユーザー設定セクション` を編集します。
 
-### ファンカーブ
+### Fan curve
 
 ```python
 FAN_CURVE: list[tuple[int, int]] = [
@@ -121,7 +133,7 @@ FAN_CURVE: list[tuple[int, int]] = [
 
 `(温度℃, ファン速度%)` のタプルを温度の昇順で並べます。点と点の間は線形補間されます。
 
-### ランプレート制御
+### Ramp rate control
 
 ファン速度の変化を時間的に滑らかにする機能です。ヒステリシスが「ファンを動かすかどうか」を決めるのに対し、ランプレートは「動かすときにどれくらいの速さで動かすか」を決めます。
 
@@ -130,14 +142,14 @@ RAMP_RATE_UP_PER_SEC:   Optional[float] = 8   # 上昇の最大レート (%/秒)
 RAMP_RATE_DOWN_PER_SEC: Optional[float] = 2   # 下降の最大レート (%/秒)
 ```
 
-- **上昇は早め (5〜10)**：高負荷が来たときにサッと冷やしたい
-- **下降は遅め (1〜3)**：静かな場面でスーッと自然にフェードアウトする
+- **上昇は早め (5〜10)**: 高負荷が来たときにサッと冷やしたい
+- **下降は遅め (1〜3)**: 静かな場面でスーッと自然にフェードアウトする
 - `None` にすると即時変化（ランプなしの従来挙動）
 - 上昇だけ即時・下降だけマイルド、のような非対称設定も可能
 
 **例**: 現在 30% のファンが目標 80% に上昇する場合、`RAMP_RATE_UP_PER_SEC = 5` なら `(80-30)/5 = 10秒` かけて段階的に上がります。
 
-### その他の設定
+### Other parameters
 
 | パラメータ | デフォルト | 説明 |
 |---|---|---|
@@ -156,11 +168,11 @@ RAMP_RATE_DOWN_PER_SEC: Optional[float] = 2   # 下降の最大レート (%/秒)
 sudo systemctl restart nvidia-fan-curve.service
 ```
 
-## 推奨プリセット
+## Recommended Presets
 
 カーブとランプレートを組み合わせた推奨プリセットです。
 
-### 静音重視 (デフォルト)
+### Quiet (default)
 
 急な音の変化を抑え、なめらかに追従します。
 
@@ -170,7 +182,7 @@ RAMP_RATE_UP_PER_SEC   = 8
 RAMP_RATE_DOWN_PER_SEC = 2
 ```
 
-### バランス型
+### Balanced
 
 ```python
 FAN_CURVE = [(30, 35), (50, 45), (65, 60), (75, 80), (85, 100)]
@@ -178,7 +190,7 @@ RAMP_RATE_UP_PER_SEC   = 10
 RAMP_RATE_DOWN_PER_SEC = 3
 ```
 
-### 冷却重視 (高負荷ゲーミング向け)
+### Performance (heavy gaming)
 
 レスポンス重視でランプを無効化し、目標速度に即時到達させます。
 
@@ -188,7 +200,7 @@ RAMP_RATE_UP_PER_SEC   = None   # 即時
 RAMP_RATE_DOWN_PER_SEC = 3
 ```
 
-## 管理コマンド
+## Management Commands
 
 ```bash
 # サービスの状態確認
@@ -216,7 +228,7 @@ GPU の温度とファン速度をリアルタイムで監視:
 watch -n 1 'nvidia-smi --query-gpu=temperature.gpu,fan.speed --format=csv'
 ```
 
-## venv で運用する
+## Running in a venv
 
 システム Python を汚したくない場合の手順です。
 
@@ -231,7 +243,7 @@ systemd ユニットの `ExecStart` を以下に変更:
 ExecStart=/opt/nvidia-fan-curve/venv/bin/python /opt/nvidia-fan-curve/nvidia-fan-curve.py
 ```
 
-## トラブルシューティング
+## Troubleshooting
 
 <details>
 <summary><strong>ModuleNotFoundError: No module named 'pynvml'</strong></summary>
@@ -258,6 +270,7 @@ ExecStart=/opt/nvidia-fan-curve/venv/bin/python /opt/nvidia-fan-curve/nvidia-fan
 <summary><strong>初回ファン速度設定に失敗</strong></summary>
 
 主な原因:
+
 - root で実行していない
 - ドライバが古い
 - 別のファン制御プロセスが動いている (`ps aux | grep nvidia` で確認)
@@ -270,9 +283,9 @@ ExecStart=/opt/nvidia-fan-curve/venv/bin/python /opt/nvidia-fan-curve/nvidia-fan
 
 解決策はいくつかあります:
 
-1. **ランプレートを下げる**: `RAMP_RATE_UP_PER_SEC` や `RAMP_RATE_DOWN_PER_SEC` を小さくすると、変化がよりなめらかになります
-2. **ヒステリシスを大きくする**: `HYSTERESIS` を 8〜10 にすると、下降する閾値が遠くなり、上下の往復が減ります
-3. **ポーリング間隔を伸ばす**: `POLL_INTERVAL` を長くするのも有効です
+1. **ランプレートを下げる**: `RAMP_RATE_UP_PER_SEC` や `RAMP_RATE_DOWN_PER_SEC` を小さくすると、変化がよりなめらかになります。
+2. **ヒステリシスを大きくする**: `HYSTERESIS` を 8〜10 にすると、下降する閾値が遠くなり、上下の往復が減ります。
+3. **ポーリング間隔を伸ばす**: `POLL_INTERVAL` を長くするのも有効です。
 
 </details>
 
@@ -283,7 +296,7 @@ ExecStart=/opt/nvidia-fan-curve/venv/bin/python /opt/nvidia-fan-curve/nvidia-fan
 
 </details>
 
-## アンインストール
+## Uninstall
 
 ```bash
 sudo systemctl disable --now nvidia-fan-curve.service
@@ -292,7 +305,7 @@ sudo rm -rf /opt/nvidia-fan-curve
 sudo systemctl daemon-reload
 ```
 
-## 仕組み
+## How It Works
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -338,14 +351,14 @@ sudo systemctl daemon-reload
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 既知の制限
+## Known Limitations
 
 - **シングル GPU 前提**: マルチ GPU 環境では `GPU_INDEX` を設定し、GPU ごとに別サービスとして起動してください。
 - **`nvmlDeviceSetDefaultFanSpeed_v2` のドライババグ**: 一部のドライバ世代でこの API を呼んでも実際には自動カーブが再開されないことが報告されています。本スクリプトは `SHUTDOWN_SAFE_SPEED` で安全側にフォールバックすることで対処しています。
 - **Maxwell 以降の GPU 限定**: それより古い GPU では NVML のファン制御 API がサポートされません。
 - **ランプレートは POLL_INTERVAL 単位**: ランプの最小ステップは `POLL_INTERVAL` 秒ごとの更新になります。より細かい制御が必要な場合は `POLL_INTERVAL` を短くしてください。
 
-## 謝辞
+## Acknowledgements
 
 設計にあたって以下のプロジェクトおよび資料を参考にしました。
 
@@ -353,16 +366,10 @@ sudo systemctl daemon-reload
 - [HackTestes/NVML-GPU-Control](https://github.com/HackTestes/NVML-GPU-Control) — NVML 経由でのファン制御の先行実装
 - [NVIDIA NVML API Reference](https://docs.nvidia.com/deploy/nvml-api/) — 公式 API ドキュメント
 
-## ライセンス
+## Contributing
 
-MIT License
+問題報告や Pull Request は [Issues](../../issues) からお気軽にどうぞ。
 
----
+## License
 
-<div align="center">
-
-**Made with ❤️ for the Linux NVIDIA community**
-
-問題報告や Pull Request は [Issues](../../issues) からお気軽にどうぞ
-
-</div>
+Released under the [MIT License](LICENSE).
